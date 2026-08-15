@@ -9,7 +9,7 @@ description = "Python client for the Blue Media payment gateway: XML protocol, S
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
-authors = [{ name = "bluemedia contributors" }]
+authors = [{ name = "Shipmind Labs", email = "hello@shipmindlabs.com" }]
 keywords = ["bluemedia", "payments", "blik", "itn", "gateway"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -25,8 +25,9 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/bluemedia/bluemedia"
-Source = "https://github.com/bluemedia/bluemedia"
+Homepage = "https://github.com/shipmindlabs/bluemedia"
+Source = "https://github.com/shipmindlabs/bluemedia"
+Issues = "https://github.com/shipmindlabs/bluemedia/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bluemedia"]
