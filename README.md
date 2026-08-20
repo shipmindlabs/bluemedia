@@ -5,8 +5,8 @@ BLIK, ITN and recurring notifications.
 
 ## Status
 
-Early. The package can build the string a message is signed over; hashing, XML
-and transport are not implemented yet.
+Early. The package can build the string a message is signed over and hash it
+with the shared key; XML and transport are not implemented yet.
 
 ## Installation
 
@@ -45,6 +45,32 @@ mention raises `UnknownFieldError` instead of quietly disappearing from the
 string.
 
 Use `ordered_values()` when the parts are more useful than the joined string.
+
+## Hashing and verifying
+
+The shared key is appended to the ordered values as one more part, and the whole
+thing is hashed. `sign()` returns the lowercase hex digest that belongs in the
+`hash` field:
+
+```python
+from bluemedia import ITN_FIELD_ORDER, TRANSACTION_FIELD_ORDER, sign, verify
+
+sign(request, TRANSACTION_FIELD_ORDER, "shared-key")
+# '…64 hex characters…'
+
+verify(notification, ITN_FIELD_ORDER, "shared-key")
+# True
+```
+
+`verify()` recomputes the digest and compares it in constant time. It reads the
+digest from the message's `hash` field, or takes one through `digest=`, and
+tolerates surrounding whitespace and uppercase because gateways deliver both. A
+message carrying no digest is unverified rather than an error, so every
+rejection -- wrong key, wrong field order, truncated payload, missing hash --
+looks the same to the caller: `False`.
+
+Services configured for another digest algorithm pass `algorithm="sha512"` or
+any other name `hashlib` accepts; the default is SHA-256.
 
 ## Development
 

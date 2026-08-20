@@ -1,4 +1,4 @@
-"""Building the exact string that Blue Media hashes.
+"""Building and hashing the exact string that Blue Media signs.
 
 The gateway does not sign a serialised document. It signs the *values* of a
 fixed set of fields, joined by a separator, taken in the order declared by the
@@ -6,26 +6,37 @@ specification -- which is neither document order nor alphabetical order. Get
 the order wrong and every digest is wrong, so the order lives here as data and
 is pinned down by table-driven tests.
 
-This module stops at the string; hashing and XML belong elsewhere.
+The digest is the hash of those values with the shared key appended as one more
+part. XML and transport belong elsewhere.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+import hashlib
+import hmac
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 __all__ = [
+    "DEFAULT_ALGORITHM",
     "DEFAULT_SEPARATOR",
     "DuplicateFieldError",
     "HASH_FIELD_NAMES",
     "ITN_FIELD_ORDER",
     "TRANSACTION_FIELD_ORDER",
     "UnknownFieldError",
+    "hash_values",
     "ordered_values",
+    "sign",
     "string_to_sign",
+    "verify",
 ]
 
 DEFAULT_SEPARATOR = "|"
+
+#: Blue Media configures the digest algorithm per service; SHA-256 is the usual
+#: setting and the only one this client defaults to.
+DEFAULT_ALGORITHM = "sha256"
 
 #: Order of a transaction request sent to the gateway.
 TRANSACTION_FIELD_ORDER: tuple[str, ...] = (
@@ -167,3 +178,68 @@ def string_to_sign(
 ) -> str:
     """Join the ordered values into the string the gateway hashes."""
     return separator.join(ordered_values(fields, order))
+
+
+def hash_values(
+    values: Sequence[str],
+    key: str,
+    *,
+    separator: str = DEFAULT_SEPARATOR,
+    algorithm: str = DEFAULT_ALGORITHM,
+) -> str:
+    """Hash already ordered values with the shared key as the final part."""
+    if not key:
+        raise ValueError("the shared key must not be empty")
+    payload = separator.join([*values, key])
+    return hashlib.new(algorithm, payload.encode("utf-8")).hexdigest()
+
+
+def sign(
+    fields: Mapping[str, Any],
+    order: Iterable[str],
+    key: str,
+    *,
+    separator: str = DEFAULT_SEPARATOR,
+    algorithm: str = DEFAULT_ALGORITHM,
+) -> str:
+    """Return the lowercase hex digest of ``fields`` signed with ``key``."""
+    return hash_values(
+        ordered_values(fields, order),
+        key,
+        separator=separator,
+        algorithm=algorithm,
+    )
+
+
+def _supplied_digest(fields: Mapping[str, Any]) -> str | None:
+    for name, value in fields.items():
+        if _key(name) in HASH_FIELD_NAMES:
+            return value if isinstance(value, str) else None
+    return None
+
+
+def verify(
+    fields: Mapping[str, Any],
+    order: Iterable[str],
+    key: str,
+    *,
+    digest: str | None = None,
+    separator: str = DEFAULT_SEPARATOR,
+    algorithm: str = DEFAULT_ALGORITHM,
+) -> bool:
+    """Check the digest of an incoming message.
+
+    The digest is taken from ``digest`` when given, otherwise from the hash
+    field of ``fields``. A message without one is unverified, not an error, so
+    a caller can treat every rejection the same way.
+    """
+    candidate = digest if digest is not None else _supplied_digest(fields)
+    if candidate is None:
+        return False
+    expected = sign(
+        fields, order, key, separator=separator, algorithm=algorithm
+    )
+    # Constant time: the comparison runs against an attacker-supplied digest.
+    return hmac.compare_digest(
+        expected.encode("ascii"), candidate.strip().lower().encode("utf-8")
+    )
