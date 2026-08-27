@@ -24,6 +24,7 @@ __all__ = [
     "HASH_FIELD_NAMES",
     "ITN_FIELD_ORDER",
     "TRANSACTION_FIELD_ORDER",
+    "TRANSACTION_INIT_FIELD_ORDER",
     "UnknownFieldError",
     "hash_values",
     "ordered_values",
@@ -72,6 +73,20 @@ TRANSACTION_FIELD_ORDER: tuple[str, ...] = (
     "ClientHash",
     "PaymentToken",
     "PaymentTokenExpirationDate",
+)
+
+#: Order of the answer the gateway returns to a transaction request. Shorter
+#: than the request, and the redirection URL closes it.
+TRANSACTION_INIT_FIELD_ORDER: tuple[str, ...] = (
+    "serviceID",
+    "orderID",
+    "remoteID",
+    "amount",
+    "currency",
+    "gatewayID",
+    "paymentDate",
+    "paymentStatus",
+    "redirecturl",
 )
 
 #: Order of an ITN, the payment notification the gateway pushes to the shop.
