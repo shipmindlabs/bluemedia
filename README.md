@@ -6,14 +6,17 @@ BLIK, ITN and recurring notifications.
 ## Status
 
 Early. The package can build the string a message is signed over, hash it with
-the shared key, and read and write the transaction documents; transport is not
-implemented yet.
+the shared key, read and write the transaction documents, and start a
+transaction against the gateway; notifications are next.
 
 ## Installation
 
 ```bash
 pip install bluemedia
 ```
+
+Signing and parsing need nothing but the standard library. Sending needs an HTTP
+client: either install `bluemedia[httpx]` or pass your own.
 
 ## The string to sign
 
@@ -111,6 +114,41 @@ left empty: each raises a subclass of `XMLParseError` rather than producing a
 half-filled object that would only fail later, at the digest. Values stay text
 throughout, since the gateway signs the exact characters it sent and `10.90`
 must not come back as `10.9`.
+
+## Starting a transaction
+
+`Client` holds one service's id and shared key, builds the request, signs it,
+posts it and verifies the answer:
+
+```python
+from bluemedia import Client
+
+with Client("123456", "shared-key") as client:
+    answer = client.start(order_id="5555", amount="10.99", currency="PLN")
+
+answer.redirect_url
+# 'https://pay.example.com/AB-1'
+```
+
+The base URL defaults to the sandbox, `SANDBOX_BASE_URL`; live traffic is
+`base_url=PRODUCTION_BASE_URL`, spelled out rather than defaulted, so an
+unconfigured client cannot move real money. `timeout=` bounds every call.
+
+Transport is injected. `http=` takes anything with httpx's
+`post(url, content=..., headers=..., timeout=...)`, which is where a shared
+session, retries, a proxy or instrumentation belong -- and what the test suite
+uses instead of a network. Left out, an `httpx.Client` is created on first use
+and closed with the client.
+
+The answer is parsed and its digest checked against the same key; one that does
+not verify raises `ResponseVerificationError` rather than handing back a
+redirection URL of unknown origin. A non-2xx status raises `GatewayStatusError`,
+which carries the status and the body, and a body that is not a transaction
+document raises `XMLParseError`.
+
+Use `prepare()` to get the signed request without sending it -- useful for a
+call the client does not make yet, or for a golden test against the
+specification.
 
 ## Development
 

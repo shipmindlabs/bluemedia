@@ -25,6 +25,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+httpx = ["httpx>=0.23"]
 dev = ["pytest>=7"]
 
 [project.urls]

@@ -1,5 +1,16 @@
 """Python client for the Blue Media payment gateway."""
 
+from bluemedia.client import (
+    DEFAULT_TIMEOUT,
+    PRODUCTION_BASE_URL,
+    SANDBOX_BASE_URL,
+    TRANSACTION_PATH,
+    Client,
+    GatewayError,
+    GatewayStatusError,
+    MissingTransportError,
+    ResponseVerificationError,
+)
 from bluemedia.models import (
     DuplicateElementError,
     MalformedXMLError,
@@ -28,13 +39,22 @@ from bluemedia.signing import (
 __all__ = [
     "DEFAULT_ALGORITHM",
     "DEFAULT_SEPARATOR",
+    "DEFAULT_TIMEOUT",
+    "Client",
     "DuplicateElementError",
     "DuplicateFieldError",
+    "GatewayError",
+    "GatewayStatusError",
     "ITN_FIELD_ORDER",
     "MalformedXMLError",
     "MissingElementError",
+    "MissingTransportError",
+    "PRODUCTION_BASE_URL",
+    "ResponseVerificationError",
+    "SANDBOX_BASE_URL",
     "TRANSACTION_FIELD_ORDER",
     "TRANSACTION_INIT_FIELD_ORDER",
+    "TRANSACTION_PATH",
     "TransactionInit",
     "TransactionStart",
     "UnexpectedRootError",
