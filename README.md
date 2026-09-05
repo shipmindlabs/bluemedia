@@ -6,8 +6,9 @@ BLIK, ITN and recurring notifications.
 ## Status
 
 Early. The package can build the string a message is signed over, hash it with
-the shared key, read and write the transaction documents, and start a
-transaction against the gateway; notifications are next.
+the shared key, read and write the transaction documents, start a transaction
+against the gateway, and read and answer ITN notifications; recurring payments
+are next.
 
 ## Installation
 
@@ -149,6 +150,40 @@ document raises `XMLParseError`.
 Use `prepare()` to get the signed request without sending it -- useful for a
 call the client does not make yet, or for a golden test against the
 specification.
+
+## Notifications
+
+An ITN arrives base64-encoded in a form field, reports every payment the gateway
+has to tell the shop about in one document, and has to be answered in the same
+request, order by order:
+
+```python
+from bluemedia import NotificationList
+
+itn = NotificationList.from_base64(form["transactions"])
+reply = itn.confirm("shared-key")
+
+reply.to_xml()
+# '<confirmationList><serviceID>123456</serviceID>…</confirmationList>'
+```
+
+`confirm()` verifies each notification, answers `CONFIRMED` for the ones that
+verify and `NOTCONFIRMED` for the ones that do not, and signs the reply with the
+same key. Booking the payment is the shop's business, so `accept=` decides it:
+
+```python
+reply = itn.confirm("shared-key", accept=lambda n: book(n.order_id, n.amount))
+```
+
+The callback is only asked about notifications whose digest already verifies, so
+a forged one cannot become `CONFIRMED` by way of a callback that trusts what it
+is handed. Answering `NOTCONFIRMED` is also why a bad notification is not simply
+dropped: an unanswered one is only sent again.
+
+`serviceID` is written once, on the list, but signs every notification inside
+it, so each `Notification` is given it while parsing and verifies on its own.
+`from_xml()` takes an already decoded document; a payload that is not base64
+raises `Base64DecodeError`, one more subclass of `XMLParseError`.
 
 ## Development
 
