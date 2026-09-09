@@ -7,8 +7,8 @@ BLIK, ITN and recurring notifications.
 
 Early. The package can build the string a message is signed over, hash it with
 the shared key, read and write the transaction documents, start a transaction
-against the gateway, and read and answer ITN notifications; recurring payments
-are next.
+against the gateway, take a BLIK payment, and read and answer ITN
+notifications; recurring payments are next.
 
 ## Installation
 
@@ -150,6 +150,46 @@ document raises `XMLParseError`.
 Use `prepare()` to get the signed request without sending it -- useful for a
 call the client does not make yet, or for a golden test against the
 specification.
+
+## BLIK
+
+BLIK is a gateway rather than a second protocol: the same transaction document,
+sent to gateway `509`, which is `BLIK_GATEWAY_ID`. What it adds is the six-digit
+code the payer reads out of a banking application.
+
+```python
+from bluemedia import Client
+
+with Client("123456", "shared-key") as client:
+    answer = client.blik("777 123", order_id="5555", amount="10.99", currency="PLN")
+
+answer.payment_status
+# 'PENDING'
+answer.redirect_url
+# None
+```
+
+That is what differs from a card payment. With a code, the gateway authorises
+the payment itself and there is nowhere to send the payer: the answer carries a
+status instead of a redirection URL, the payer accepts the amount in the banking
+application, and the outcome arrives afterwards as an ITN -- so the shop books
+the order there, not on the answer. A card payment is the other way round: its
+answer is worth having only for the URL the payer is redirected to.
+
+Leave the code out and BLIK behaves like every other gateway again: the answer
+redirects to a screen where the payer enters the code, and `returnURL` brings
+them back.
+
+A code is six digits, lives about two minutes and works once. It signs in the
+place `TRANSACTION_FIELD_ORDER` gives `AuthorizationCode`, like any other field,
+which is why the grouping a payer copies along with it -- `777 123`, `777-123`
+-- is stripped before the digest is taken. Anything that is not six digits
+raises `AuthorizationCodeError` here rather than at the gateway.
+
+`blik_transaction()` builds the same request without sending it, for `prepare()`
+or for a caller that posts it elsewhere. The alias fields -- `blik_uid_key`,
+`blik_alias_key` and their labels -- travel on that request too, for a service
+that registers the payer to pay later without a code.
 
 ## Notifications
 

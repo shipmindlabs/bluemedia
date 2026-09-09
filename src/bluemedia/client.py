@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+from bluemedia.blik import blik_transaction
 from bluemedia.models import TransactionInit, TransactionStart
 from bluemedia.signing import DEFAULT_ALGORITHM, DEFAULT_SEPARATOR
 
@@ -182,6 +183,18 @@ class Client:
         ):
             raise ResponseVerificationError(answer)
         return answer
+
+    def blik(self, code: str | None = None, /, **fields: Any) -> TransactionInit:
+        """Start a payment on the BLIK gateway, with the payer's code or without.
+
+        With the code, the gateway authorises the payment itself and the answer
+        carries a status instead of a redirection URL: the payer confirms the
+        amount in the banking application and the outcome arrives later, as a
+        notification. Without it, the answer redirects to the screen where the
+        payer enters the code.
+        """
+        fields.setdefault("service_id", self.service_id)
+        return self.start(blik_transaction(code=code, **fields))
 
     def post(self, path: str, document: str) -> str:
         """Post one XML document and return the body of the answer."""

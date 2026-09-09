@@ -1,5 +1,12 @@
 """Python client for the Blue Media payment gateway."""
 
+from bluemedia.blik import (
+    AUTHORIZATION_CODE_LENGTH,
+    BLIK_GATEWAY_ID,
+    AuthorizationCodeError,
+    authorization_code,
+    blik_transaction,
+)
 from bluemedia.client import (
     DEFAULT_TIMEOUT,
     PRODUCTION_BASE_URL,
@@ -49,6 +56,9 @@ from bluemedia.signing import (
 )
 
 __all__ = [
+    "AUTHORIZATION_CODE_LENGTH",
+    "AuthorizationCodeError",
+    "BLIK_GATEWAY_ID",
     "Base64DecodeError",
     "CONFIRMATION_ROOT",
     "CONFIRMED",
@@ -83,6 +93,8 @@ __all__ = [
     "UnknownFieldError",
     "XMLParseError",
     "__version__",
+    "authorization_code",
+    "blik_transaction",
     "decode_base64",
     "hash_values",
     "ordered_values",
