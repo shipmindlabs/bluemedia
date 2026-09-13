@@ -1,4 +1,4 @@
-"""Starting a transaction: build the request, sign it, send it.
+"""Talking to the gateway: start a payment, then act on one that exists.
 
 The transport is injected. This client calls whatever object exposes httpx's
 ``post(url, content=..., headers=..., timeout=...)``, which keeps the network
@@ -13,16 +13,28 @@ real money.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 from bluemedia.blik import blik_transaction
-from bluemedia.models import TransactionInit, TransactionStart
+from bluemedia.itn import NotificationList
+from bluemedia.models import TransactionInit, TransactionStart, _Document
+from bluemedia.operations import (
+    CancelRequest,
+    CancelResponse,
+    RefundRequest,
+    RefundResponse,
+    StatusRequest,
+    new_message_id,
+)
 from bluemedia.signing import DEFAULT_ALGORITHM, DEFAULT_SEPARATOR
 
 __all__ = [
+    "CANCEL_PATH",
     "DEFAULT_TIMEOUT",
     "PRODUCTION_BASE_URL",
+    "REFUND_PATH",
     "SANDBOX_BASE_URL",
+    "STATUS_PATH",
     "TRANSACTION_PATH",
     "Client",
     "GatewayError",
@@ -42,9 +54,21 @@ PRODUCTION_BASE_URL = "https://pay.bm.pl"
 #: Endpoint a transaction request is posted to.
 TRANSACTION_PATH = "/payment"
 
+#: Endpoint a refund request is posted to.
+REFUND_PATH = "/transactionRefund"
+
+#: Endpoint a cancellation request is posted to.
+CANCEL_PATH = "/transactionCancel"
+
+#: Endpoint a status query is posted to.
+STATUS_PATH = "/transactionStatus"
+
 DEFAULT_TIMEOUT = 30.0
 
 XML_CONTENT_TYPE = "application/xml; charset=UTF-8"
+
+_Request = TypeVar("_Request", bound=_Document)
+_Answer = TypeVar("_Answer", bound=_Document)
 
 
 class GatewayError(RuntimeError):
@@ -63,7 +87,7 @@ class GatewayStatusError(GatewayError):
 class ResponseVerificationError(GatewayError):
     """The answer parsed, but its digest is not the one the key produces."""
 
-    def __init__(self, response: TransactionInit) -> None:
+    def __init__(self, response: Any) -> None:
         self.response = response
         super().__init__("the gateway's answer does not verify with the shared key")
 
@@ -175,14 +199,9 @@ class Client:
         error rather than a value, because its redirection URL is where a payer
         would be sent.
         """
-        signed = self.prepare(request, **fields)
-        payload = self.post(TRANSACTION_PATH, signed.to_xml())
-        answer = TransactionInit.from_xml(payload)
-        if self.verify_responses and not answer.verify(
-            self._key, separator=self.separator, algorithm=self.algorithm
-        ):
-            raise ResponseVerificationError(answer)
-        return answer
+        return self._exchange(
+            TRANSACTION_PATH, self.prepare(request, **fields), TransactionInit
+        )
 
     def blik(self, code: str | None = None, /, **fields: Any) -> TransactionInit:
         """Start a payment on the BLIK gateway, with the payer's code or without.
@@ -195,6 +214,51 @@ class Client:
         """
         fields.setdefault("service_id", self.service_id)
         return self.start(blik_transaction(code=code, **fields))
+
+    def refund(
+        self, request: RefundRequest | None = None, /, **fields: Any
+    ) -> RefundResponse:
+        """Send a payment back, whole or in part.
+
+        With ``amount``, only that much goes back and the rest of the payment
+        stands; without it, the gateway returns everything it took. The payment
+        is named by ``remote_id`` or by ``order_id``, and a ``message_id`` is
+        made up when the caller does not bring one.
+        """
+        return self._exchange(
+            REFUND_PATH,
+            self._operation(RefundRequest, request, fields),
+            RefundResponse,
+        )
+
+    def cancel(
+        self, request: CancelRequest | None = None, /, **fields: Any
+    ) -> CancelResponse:
+        """Call off a payment the gateway has not settled yet."""
+        return self._exchange(
+            CANCEL_PATH,
+            self._operation(CancelRequest, request, fields),
+            CancelResponse,
+        )
+
+    def status(
+        self, request: StatusRequest | None = None, /, **fields: Any
+    ) -> NotificationList:
+        """Ask where a payment stands.
+
+        The gateway answers a query with the document it pushes as an ITN, so
+        the answer comes back as a ``NotificationList`` and every payment in it
+        verifies on its own; one that does not is refused rather than returned.
+        """
+        signed = self._operation(StatusRequest, request, fields)
+        answer = NotificationList.from_xml(self.post(STATUS_PATH, signed.to_xml()))
+        if self.verify_responses:
+            for notification in answer:
+                if not notification.verify(
+                    self._key, separator=self.separator, algorithm=self.algorithm
+                ):
+                    raise ResponseVerificationError(notification)
+        return answer
 
     def post(self, path: str, document: str) -> str:
         """Post one XML document and return the body of the answer."""
@@ -220,3 +284,31 @@ class Client:
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
+
+    def _operation(
+        self,
+        model: type[_Request],
+        request: _Request | None,
+        fields: dict[str, Any],
+    ) -> _Request:
+        if request is not None and fields:
+            raise TypeError(
+                f"pass either a {model.__name__} or its fields, not both"
+            )
+        if request is None:
+            fields.setdefault("service_id", self.service_id)
+            fields.setdefault("message_id", new_message_id())
+            request = model(**fields)
+        return request.signed(
+            self._key, separator=self.separator, algorithm=self.algorithm
+        )
+
+    def _exchange(
+        self, path: str, signed: _Document, answer_type: type[_Answer]
+    ) -> _Answer:
+        answer = answer_type.from_xml(self.post(path, signed.to_xml()))
+        if self.verify_responses and not answer.verify(
+            self._key, separator=self.separator, algorithm=self.algorithm
+        ):
+            raise ResponseVerificationError(answer)
+        return answer
