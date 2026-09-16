@@ -7,8 +7,9 @@ BLIK, ITN and recurring notifications.
 
 Early. The package can build the string a message is signed over, hash it with
 the shared key, read and write the transaction documents, start a transaction
-against the gateway, take a BLIK payment, and read and answer ITN
-notifications; recurring payments are next.
+against the gateway, take a BLIK payment, read and answer ITN notifications,
+and refund, cancel or query a payment it already made; recurring payments are
+next.
 
 ## Installation
 
@@ -224,6 +225,59 @@ dropped: an unanswered one is only sent again.
 it, so each `Notification` is given it while parsing and verifies on its own.
 `from_xml()` takes an already decoded document; a payload that is not base64
 raises `Base64DecodeError`, one more subclass of `XMLParseError`.
+
+## Refunds, cancellation and status
+
+Three calls act on a payment that already exists. Each names it by the gateway's
+own `remote_id` or by the shop's `order_id`, and each carries a `message_id` the
+gateway echoes back, so an answer can be matched to the call that caused it; one
+is made up when the caller brings none.
+
+```python
+from bluemedia import Client
+
+with Client("123456", "shared-key") as client:
+    answer = client.refund(remote_id="AB-1", amount="5.00", currency="PLN")
+
+answer.remote_out_id
+# 'AB-1-R'
+answer.succeeded
+# True
+```
+
+A refund is partial when it names an amount and whole when it does not: the
+amount is a field like any other, so leaving it out keeps it out of the document
+and out of the digest, and the gateway sends back everything it took. That the
+difference between the two is one absent field is why an amount which is present
+but blank raises `RefundAmountError` -- an empty form field must not quietly
+turn a partial refund into a full one. On the answer, `remote_out_id` identifies
+the refund itself, which is not the identifier of the payment it came out of.
+
+`succeeded` means `SUCCESS` and nothing else. A refund the gateway accepted but
+has not finished answers `PENDING` and reports its outcome later, as an ITN, so
+read `refund_status` where the difference between refused and not yet matters;
+`refund_reason` says why a `FAILURE` was refused. `cancel()` calls off a payment
+the gateway has not settled and its answer reads the same way, through
+`cancel_status`, `cancel_reason` and `succeeded`.
+
+`status()` asks where a payment stands. The gateway answers a query with the
+document it pushes as an ITN, so the answer is a `NotificationList` and every
+payment in it verifies on its own; one that does not raises
+`ResponseVerificationError` rather than coming back as a payment to book.
+
+```python
+answer = client.status(order_id="5555")
+answer[0].payment_status
+# 'SUCCESS'
+```
+
+A request naming no payment -- neither identifier, or one holding nothing --
+raises `MissingReferenceError` before anything is sent, because at the gateway
+it would apply to nothing. Each request signs in its own declared order,
+`REFUND_FIELD_ORDER`, `CANCEL_FIELD_ORDER` and `TRANSACTION_STATUS_FIELD_ORDER`,
+and goes to its own endpoint; `RefundRequest`, `CancelRequest` and
+`StatusRequest` build and sign the same documents for a caller that posts them
+elsewhere.
 
 ## Development
 

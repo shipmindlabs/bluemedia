@@ -26,6 +26,7 @@ from bluemedia import (
     MissingReferenceError,
     Notification,
     NotificationList,
+    RefundAmountError,
     RefundRequest,
     RefundResponse,
     ResponseVerificationError,
@@ -154,10 +155,40 @@ def test_a_partial_refund_signs_the_amount_where_the_order_puts_it():
     )
 
 
+@pytest.mark.parametrize("amount", ["", "   ", "\n"])
+def test_a_blank_amount_does_not_become_a_full_refund(amount):
+    with pytest.raises(RefundAmountError) as excinfo:
+        RefundRequest(
+            service_id=SERVICE_ID,
+            message_id="M-1",
+            remote_id="AB-1",
+            amount=amount,
+        )
+    assert isinstance(excinfo.value, ValueError)
+
+
+def test_a_blank_amount_reaches_no_transport():
+    gateway, transport = client(refund_answer())
+    with pytest.raises(RefundAmountError):
+        gateway.refund(remote_id="AB-1", amount="")
+    assert transport.calls == []
+
+
 @pytest.mark.parametrize("model", [RefundRequest, CancelRequest, StatusRequest])
 def test_a_request_naming_no_payment_is_refused(model):
     with pytest.raises(MissingReferenceError):
         model(service_id=SERVICE_ID, message_id="M-1")
+
+
+@pytest.mark.parametrize("model", [RefundRequest, CancelRequest, StatusRequest])
+@pytest.mark.parametrize(
+    "reference",
+    [{"remote_id": ""}, {"order_id": "   "}, {"remote_id": "", "order_id": ""}],
+    ids=["empty remote id", "blank order id", "both empty"],
+)
+def test_an_identifier_holding_nothing_names_no_payment(model, reference):
+    with pytest.raises(MissingReferenceError):
+        model(service_id=SERVICE_ID, message_id="M-1", **reference)
 
 
 @pytest.mark.parametrize("reference", [{"remote_id": "AB-1"}, {"order_id": "5555"}])

@@ -3,12 +3,16 @@
 The three requests share a shape. Each names a payment the gateway already
 knows -- by the gateway's own ``remoteID`` or by the shop's ``orderID`` -- and
 each carries a ``messageID`` the gateway echoes back, so an answer can be
-matched to the call that caused it. A request naming neither payment raises
-here rather than at the gateway, where it would apply to nothing.
+matched to the call that caused it. A request naming neither payment, or
+naming one with an identifier that holds nothing, raises here rather than at
+the gateway, where it would apply to nothing.
 
 A refund is partial when it names an amount and whole when it does not: the
 amount is a field like any other, so leaving it out keeps it out of the
 document and out of the digest, and the gateway sends back everything it took.
+That the difference between the two is one absent field is also why a blank
+amount is refused: an empty form field must not turn a partial refund into a
+full one.
 
 A status query is answered with the document an ITN arrives in, which
 ``bluemedia.itn`` already reads; only the request lives here.
@@ -34,6 +38,7 @@ __all__ = [
     "CancelRequest",
     "CancelResponse",
     "MissingReferenceError",
+    "RefundAmountError",
     "RefundRequest",
     "RefundResponse",
     "StatusRequest",
@@ -108,9 +113,24 @@ class MissingReferenceError(ValueError):
         super().__init__("name the payment by remote_id or order_id")
 
 
+class RefundAmountError(ValueError):
+    """The refund carries an amount field that names no amount."""
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+        super().__init__(
+            "a refund is for an amount or for the whole payment, "
+            f"not {value!r}"
+        )
+
+
 def new_message_id() -> str:
     """Return a fresh id for one call to the gateway."""
     return uuid.uuid4().hex
+
+
+def _blank(value: str | None) -> bool:
+    return value is None or not value.strip()
 
 
 class _Operation(_Document):
@@ -122,7 +142,7 @@ class _Operation(_Document):
     order_id: str | None
 
     def __post_init__(self) -> None:
-        if self.remote_id is None and self.order_id is None:
+        if _blank(self.remote_id) and _blank(self.order_id):
             raise MissingReferenceError()
 
 
@@ -140,6 +160,13 @@ class RefundRequest(_Operation):
     amount: str | None = _optional("amount")
     currency: str | None = _optional("currency")
     hash: str | None = _optional("hash")
+
+    def __post_init__(self) -> None:
+        # slots=True rebuilds the class, which leaves the cell a zero-argument
+        # super() reads pointing at the class it replaced.
+        _Operation.__post_init__(self)
+        if self.amount is not None and _blank(self.amount):
+            raise RefundAmountError(self.amount)
 
     @property
     def partial(self) -> bool:
