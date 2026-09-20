@@ -3,6 +3,29 @@
 Python client for the Blue Media payment gateway: XML protocol, SHA-256 signing,
 BLIK, ITN and recurring notifications.
 
+## What Blue Media is, and why this exists
+
+Blue Media is a Polish payment provider. A shop posts it a transaction, the
+payer is taken to a bank transfer, a card form or BLIK, and the outcome comes
+back to the shop as a notification the shop has to answer. The protocol itself
+is small: a handful of XML documents over HTTPS, no SDK, no session, no tokens.
+
+What is not small is the signature. Blue Media does not sign a serialised
+document; it signs the *values* of a fixed set of fields, joined by `|`, taken
+in the order the specification declares field by field -- which is neither
+document order nor alphabetical order -- with the shared key appended as one
+more part. Empty fields drop out, the hash field never signs itself, and one
+field in the wrong place changes the digest completely. The gateway answers a
+wrong digest by refusing the request, without saying which of thirty-odd fields
+moved.
+
+So this package keeps the orders as data, pinned by table-driven tests; gives
+each document a typed model that knows its own order, so signing and verifying
+need no bookkeeping from the caller; parses incoming documents strictly,
+because a payment document is untrusted input; verifies every answer before
+handing it back; and defaults to the sandbox, so a client nobody configured
+cannot move real money.
+
 ## Status
 
 Early. The package can build the string a message is signed over, hash it with
@@ -20,14 +43,96 @@ pip install bluemedia
 Signing and parsing need nothing but the standard library. Sending needs an HTTP
 client: either install `bluemedia[httpx]` or pass your own.
 
+## Quickstart: a payment in the sandbox
+
+The service id and the shared key come from a Blue Media test account; the two
+below are the ones this README signs its examples with. `Client` builds the
+request, signs it, posts it to the sandbox and verifies what comes back.
+
+```python
+from bluemedia import Client
+
+SERVICE_ID = "123456"
+SHARED_KEY = "9dfc5eb3d1b2f4e0"
+
+with Client(SERVICE_ID, SHARED_KEY) as client:
+    answer = client.start(
+        order_id="5555",
+        amount="10.99",
+        currency="PLN",
+        description="Order 5555",
+        return_url="https://shop.example.com/return",
+    )
+
+print(answer.remote_id)      # 'AB-1'   the gateway's own name for the payment
+print(answer.payment_status) # 'PENDING'
+print(answer.redirect_url)   # 'https://pay-accept.bm.pl/…' send the payer here
+```
+
+That call needs httpx (`pip install "bluemedia[httpx]"`) and a sandbox account.
+Without either, the same request can be built and signed offline, which is
+enough to check a service's configuration against the specification:
+
+```python
+from bluemedia import Client
+
+client = Client("123456", "9dfc5eb3d1b2f4e0")
+request = client.prepare(order_id="5555", amount="10.99", currency="PLN")
+
+print(request.to_xml())
+# '<transaction><serviceID>123456</serviceID>…<hash>…</hash></transaction>'
+print(request.verify("9dfc5eb3d1b2f4e0"))
+# True
+```
+
+The redirection URL is the whole point of the answer to a card or transfer
+payment: the payer goes there, pays at their bank, and returns to `returnURL`.
+The order is not paid at that moment, though. It is paid when the ITN arrives.
+
+## Quickstart: the ITN webhook
+
+An ITN is the notification the gateway pushes when a payment changes state. It
+arrives base64-encoded in a form field, reports every payment the gateway has
+to tell the shop about in one document, and has to be answered in the same HTTP
+response, order by order -- an unanswered notification is simply sent again.
+
+```python
+from flask import Flask, Response, request
+
+from bluemedia import SUCCESS, NotificationList
+
+app = Flask(__name__)
+SHARED_KEY = "9dfc5eb3d1b2f4e0"
+
+
+def book(notification):
+    """Take the payment, or refuse it, and say which."""
+    if notification.payment_status != SUCCESS:
+        return False
+    return mark_order_paid(notification.order_id, notification.amount)
+
+
+@app.post("/bluemedia/itn")
+def itn():
+    notifications = NotificationList.from_base64(request.form["transactions"])
+    reply = notifications.confirm(SHARED_KEY, accept=book)
+    return Response(reply.to_xml(), mimetype="application/xml")
+```
+
+`confirm()` verifies each notification, asks `accept` about the ones that
+verify, answers `CONFIRMED` or `NOTCONFIRMED` per order and signs the reply with
+the same key. `book()` is only ever called for a notification whose digest
+already checks out, so a forged one cannot be booked by a callback that trusts
+what it is handed; and returning false for a payment the shop cannot take
+leaves the gateway sending it again rather than considering it settled.
+
+The rest of this README is the detail behind those two examples.
+
 ## The string to sign
 
-Blue Media does not hash a serialised document. It hashes the values of a fixed
-set of fields joined by `|`, taken in the order the specification declares --
-which is neither document order nor alphabetical order. That order is data here,
-not control flow: `TRANSACTION_FIELD_ORDER` for outgoing requests,
-`TRANSACTION_INIT_FIELD_ORDER` for the gateway's answer and `ITN_FIELD_ORDER`
-for incoming notifications.
+The order is data here, not control flow: `TRANSACTION_FIELD_ORDER` for outgoing
+requests, `TRANSACTION_INIT_FIELD_ORDER` for the gateway's answer and
+`ITN_FIELD_ORDER` for incoming notifications.
 
 ```python
 from bluemedia import TRANSACTION_FIELD_ORDER, string_to_sign
@@ -119,19 +224,6 @@ must not come back as `10.9`.
 
 ## Starting a transaction
 
-`Client` holds one service's id and shared key, builds the request, signs it,
-posts it and verifies the answer:
-
-```python
-from bluemedia import Client
-
-with Client("123456", "shared-key") as client:
-    answer = client.start(order_id="5555", amount="10.99", currency="PLN")
-
-answer.redirect_url
-# 'https://pay.example.com/AB-1'
-```
-
 The base URL defaults to the sandbox, `SANDBOX_BASE_URL`; live traffic is
 `base_url=PRODUCTION_BASE_URL`, spelled out rather than defaulted, so an
 unconfigured client cannot move real money. `timeout=` bounds every call.
@@ -194,32 +286,23 @@ that registers the payer to pay later without a code.
 
 ## Notifications
 
-An ITN arrives base64-encoded in a form field, reports every payment the gateway
-has to tell the shop about in one document, and has to be answered in the same
-request, order by order:
+Booking the payment is the shop's business, so `accept=` decides it, and the
+callback is only asked about notifications whose digest already verifies:
 
 ```python
 from bluemedia import NotificationList
 
 itn = NotificationList.from_base64(form["transactions"])
-reply = itn.confirm("shared-key")
+reply = itn.confirm("shared-key", accept=lambda n: book(n.order_id, n.amount))
 
 reply.to_xml()
 # '<confirmationList><serviceID>123456</serviceID>…</confirmationList>'
 ```
 
-`confirm()` verifies each notification, answers `CONFIRMED` for the ones that
-verify and `NOTCONFIRMED` for the ones that do not, and signs the reply with the
-same key. Booking the payment is the shop's business, so `accept=` decides it:
-
-```python
-reply = itn.confirm("shared-key", accept=lambda n: book(n.order_id, n.amount))
-```
-
-The callback is only asked about notifications whose digest already verifies, so
-a forged one cannot become `CONFIRMED` by way of a callback that trusts what it
-is handed. Answering `NOTCONFIRMED` is also why a bad notification is not simply
-dropped: an unanswered one is only sent again.
+Without `accept`, everything that verifies is confirmed. Answering
+`NOTCONFIRMED` is why a bad notification is not simply dropped: an unanswered
+one is only sent again. `verified()` returns the notifications that check out,
+for a shop that wants to look before answering.
 
 `serviceID` is written once, on the list, but signs every notification inside
 it, so each `Notification` is given it while parsing and verifies on its own.
