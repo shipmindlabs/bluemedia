@@ -23,6 +23,7 @@ __all__ = [
     "DuplicateFieldError",
     "HASH_FIELD_NAMES",
     "ITN_FIELD_ORDER",
+    "RECURRING_DATA_FIELD_ORDER",
     "TRANSACTION_FIELD_ORDER",
     "TRANSACTION_INIT_FIELD_ORDER",
     "UnknownFieldError",
@@ -112,6 +113,14 @@ ITN_FIELD_ORDER: tuple[str, ...] = (
     "startAmount",
     "endAmount",
     "recurringData",
+)
+
+#: Order of the recurring part of a notification. It arrives as elements rather
+#: than text, and its parts sign in the single place ``recurringData`` has in
+#: the notification's order, one after another.
+RECURRING_DATA_FIELD_ORDER: tuple[str, ...] = (
+    "recurringAction",
+    "clientHash",
 )
 
 #: The digest travels inside the document it signs, so it is never an input.

@@ -5,6 +5,11 @@ the gateway has to report in one ``<transactionList>``. ``serviceID`` is written
 once, on the list, but signs each notification inside it, so it is filled into
 every one of them while parsing and each notification verifies on its own.
 
+A recurring payment reports one element more, and that one holds elements
+rather than text: ``recurringData`` says what the gateway did and under which
+client hash the next charge is made. It is a document of its own here, and its
+parts sign in the single place the element has in the notification's order.
+
 The answer belongs to the same request: one ``CONFIRMED`` or ``NOTCONFIRMED``
 per order, signed with the same key. A notification whose digest does not check
 out is answered ``NOTCONFIRMED`` rather than dropped -- an unanswered
@@ -28,6 +33,7 @@ from bluemedia.models import (
     XMLParseError,
     _Document,
     _element,
+    _nested,
     _optional,
     _parse,
 )
@@ -35,6 +41,7 @@ from bluemedia.signing import (
     DEFAULT_ALGORITHM,
     DEFAULT_SEPARATOR,
     ITN_FIELD_ORDER,
+    RECURRING_DATA_FIELD_ORDER,
     hash_values,
 )
 
@@ -48,6 +55,7 @@ __all__ = [
     "ConfirmationList",
     "Notification",
     "NotificationList",
+    "RecurringData",
     "decode_base64",
 ]
 
@@ -82,6 +90,23 @@ def decode_base64(payload: str | bytes) -> bytes:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class RecurringData(_Document):
+    """What a recurring payment reports, nested inside its notification.
+
+    ``recurring_action`` is what the gateway did to the subscription and
+    ``client_hash`` is what the next charge is made under. Neither signs as a
+    document of its own: both take the place ``recurringData`` has in the
+    notification's order, one after the other.
+    """
+
+    XML_ROOT: ClassVar[str] = "recurringData"
+    FIELD_ORDER: ClassVar[tuple[str, ...]] = RECURRING_DATA_FIELD_ORDER
+
+    recurring_action: str = _element("recurringAction")
+    client_hash: str | None = _optional("clientHash")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Notification(_Document):
     """One payment the gateway reports, with the digest that vouches for it.
 
@@ -111,7 +136,7 @@ class Notification(_Document):
     invoice_number: str | None = _optional("invoiceNumber")
     start_amount: str | None = _optional("startAmount")
     end_amount: str | None = _optional("endAmount")
-    recurring_data: str | None = _optional("recurringData")
+    recurring_data: RecurringData | None = _nested("recurringData", RecurringData)
     hash: str | None = _optional("hash")
 
 
@@ -327,5 +352,8 @@ def _transaction_element(notification: Notification, service_id: str) -> ET.Elem
             continue
         if f.name == "service_id" and value == service_id:
             continue
-        ET.SubElement(element, f.metadata["spec"]).text = value
+        if isinstance(value, _Document):
+            element.append(value.to_element(f.metadata["spec"]))
+        else:
+            ET.SubElement(element, f.metadata["spec"]).text = value
     return element

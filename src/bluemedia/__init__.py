@@ -31,6 +31,7 @@ from bluemedia.itn import (
     ConfirmationList,
     Notification,
     NotificationList,
+    RecurringData,
     decode_base64,
 )
 from bluemedia.models import (
@@ -65,6 +66,7 @@ from bluemedia.signing import (
     DEFAULT_ALGORITHM,
     DEFAULT_SEPARATOR,
     ITN_FIELD_ORDER,
+    RECURRING_DATA_FIELD_ORDER,
     TRANSACTION_FIELD_ORDER,
     TRANSACTION_INIT_FIELD_ORDER,
     DuplicateFieldError,
@@ -110,9 +112,11 @@ __all__ = [
     "NotificationList",
     "PENDING",
     "PRODUCTION_BASE_URL",
+    "RECURRING_DATA_FIELD_ORDER",
     "REFUND_FIELD_ORDER",
     "REFUND_PATH",
     "REFUND_RESPONSE_FIELD_ORDER",
+    "RecurringData",
     "RefundAmountError",
     "RefundRequest",
     "RefundResponse",

@@ -10,6 +10,10 @@ model does not declare, an element sent twice, a required element left out or
 left empty, all raise instead of producing a half-filled object that would fail
 later and further away, at the digest.
 
+A few elements hold elements rather than text. ``_nested`` declares one as a
+document of its own, which parses and serialises like any other and whose parts
+take the single place its element has in the signing order.
+
 Values stay text from the wire to the digest. The gateway signs the exact
 characters it sent, so ``10.90`` must not become a number that renders back as
 ``10.9``.
@@ -28,6 +32,7 @@ from bluemedia.signing import (
     TRANSACTION_FIELD_ORDER,
     TRANSACTION_INIT_FIELD_ORDER,
 )
+from bluemedia.signing import ordered_values as _ordered_values
 from bluemedia.signing import sign as _sign
 from bluemedia.signing import verify as _verify
 
@@ -109,6 +114,11 @@ def _optional(spec: str) -> Any:
     return field(default=None, metadata={"spec": spec})
 
 
+def _nested(spec: str, model: type[_Document]) -> Any:
+    """Declare an optional element that holds a document rather than text."""
+    return field(default=None, metadata={"spec": spec, "model": model})
+
+
 _D = TypeVar("_D", bound="_Document")
 
 
@@ -125,25 +135,32 @@ class _Document:
         """Parse a document into a model, refusing anything unexpected.
 
         Element names match regardless of case, surrounding whitespace is
-        stripped, and an element with no text counts as absent.
+        stripped, and an element with no text counts as absent. An element the
+        model declares as a document of its own is read by that model, just as
+        strictly.
         """
         root = source if isinstance(source, ET.Element) else _parse(source)
-        if root.tag != cls.XML_ROOT:
+        if root.tag.strip().lower() != cls.XML_ROOT.lower():
             raise UnexpectedRootError(root.tag, cls.XML_ROOT)
 
         declared = {f.metadata["spec"].lower(): f for f in fields(cls)}
-        values: dict[str, str | None] = {}
+        values: dict[str, Any] = {}
         for child in root:
             declaration = declared.get(child.tag.strip().lower())
             if declaration is None:
                 raise UnknownElementError(child.tag)
-            if len(child):
+            model = declaration.metadata.get("model")
+            if model is None and len(child):
                 raise XMLParseError(
                     f"<{child.tag}> must hold text, not further elements"
                 )
             if declaration.name in values:
                 raise DuplicateElementError(child.tag)
-            values[declaration.name] = (child.text or "").strip() or None
+            values[declaration.name] = (
+                model.from_xml(child)
+                if model is not None
+                else (child.text or "").strip() or None
+            )
 
         missing = [
             f.metadata["spec"]
@@ -154,22 +171,42 @@ class _Document:
             raise MissingElementError(missing)
         return cls(**{name: value for name, value in values.items() if value is not None})
 
-    def to_xml(self) -> str:
-        """Serialise the model back into the document the gateway reads."""
-        root = ET.Element(self.XML_ROOT)
+    def to_element(self, tag: str | None = None) -> ET.Element:
+        """Build the element this model is written as."""
+        root = ET.Element(tag or self.XML_ROOT)
         for f in fields(self):
             value = getattr(self, f.name)
-            if value is not None:
+            if value is None:
+                continue
+            if isinstance(value, _Document):
+                root.append(value.to_element(f.metadata["spec"]))
+            else:
                 ET.SubElement(root, f.metadata["spec"]).text = value
-        return ET.tostring(root, encoding="unicode")
+        return root
 
-    def to_fields(self) -> dict[str, str]:
-        """Return the set values keyed by their specification names."""
-        return {
-            f.metadata["spec"]: getattr(self, f.name)
-            for f in fields(self)
-            if getattr(self, f.name) is not None
-        }
+    def to_xml(self) -> str:
+        """Serialise the model back into the document the gateway reads."""
+        return ET.tostring(self.to_element(), encoding="unicode")
+
+    def to_fields(self) -> dict[str, Any]:
+        """Return the set values keyed by their specification names.
+
+        A nested document contributes its own ordered parts, which the signing
+        string then expands in the place its element has.
+        """
+        supplied: dict[str, Any] = {}
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if value is None:
+                continue
+            supplied[f.metadata["spec"]] = (
+                value.values() if isinstance(value, _Document) else value
+            )
+        return supplied
+
+    def values(self) -> list[str]:
+        """The parts this message's digest is taken over, in order."""
+        return _ordered_values(self.to_fields(), self.FIELD_ORDER)
 
     def sign(
         self,
