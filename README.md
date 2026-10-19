@@ -30,9 +30,9 @@ cannot move real money.
 
 Early. The package can build the string a message is signed over, hash it with
 the shared key, read and write the transaction documents, start a transaction
-against the gateway, take a BLIK payment, read and answer ITN notifications,
-and refund, cancel or query a payment it already made; recurring payments are
-next.
+against the gateway, take a BLIK payment, read and answer ITN notifications --
+the recurring ones among them -- and refund, cancel or query a payment it
+already made.
 
 ## Installation
 
@@ -308,6 +308,41 @@ for a shop that wants to look before answering.
 it, so each `Notification` is given it while parsing and verifies on its own.
 `from_xml()` takes an already decoded document; a payload that is not base64
 raises `Base64DecodeError`, one more subclass of `XMLParseError`.
+
+### Recurring payments
+
+A recurring payment reports one element more, and that one holds elements
+rather than text:
+
+```xml
+<recurringData>
+  <recurringAction>INIT</recurringAction>
+  <clientHash>CLIENT-HASH</clientHash>
+</recurringData>
+```
+
+`recurring_data` reads it as a `RecurringData` of its own, as strictly as the
+notification around it: a missing action, a part the model does not declare, or
+an element carrying text where parts belong all raise an `XMLParseError`
+instead of reaching the digest half-read.
+
+```python
+payment = itn[0]
+
+payment.recurring_data.recurring_action
+# 'INIT'       what the gateway did to the subscription
+payment.recurring_data.client_hash
+# 'CLIENT-HASH'  what the next charge is made under
+payment.verify("shared-key")
+# True
+```
+
+The nested document never signs on its own. Its parts take the single place
+`recurringData` has in `ITN_FIELD_ORDER` -- last -- one after another, in the
+order `RECURRING_DATA_FIELD_ORDER` declares, which is the flatten rule every
+multi-valued field already follows. So a recurring notification signs over two
+parts more than the same payment without one, a `clientHash` left out simply
+drops a part, and a plain notification signs exactly as it did before.
 
 ## Refunds, cancellation and status
 
