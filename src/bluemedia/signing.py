@@ -26,6 +26,7 @@ __all__ = [
     "RECURRING_DATA_FIELD_ORDER",
     "TRANSACTION_FIELD_ORDER",
     "TRANSACTION_INIT_FIELD_ORDER",
+    "TRANSACTION_REFUSAL_FIELD_ORDER",
     "UnknownFieldError",
     "hash_values",
     "ordered_values",
@@ -88,6 +89,16 @@ TRANSACTION_INIT_FIELD_ORDER: tuple[str, ...] = (
     "paymentDate",
     "paymentStatus",
     "redirecturl",
+)
+
+#: Order of the document a refused start comes back as. It reports an outcome
+#: for the order rather than a payment, so it carries neither a remote id nor a
+#: redirection URL.
+TRANSACTION_REFUSAL_FIELD_ORDER: tuple[str, ...] = (
+    "serviceID",
+    "orderID",
+    "confirmation",
+    "reason",
 )
 
 #: Order of an ITN, the payment notification the gateway pushes to the shop.

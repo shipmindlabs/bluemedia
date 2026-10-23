@@ -17,7 +17,13 @@ from typing import Any, Protocol, TypeVar
 
 from bluemedia.blik import blik_transaction
 from bluemedia.itn import NotificationList
-from bluemedia.models import TransactionInit, TransactionStart, _Document
+from bluemedia.models import (
+    TransactionInit,
+    TransactionRefusal,
+    TransactionStart,
+    _Document,
+    _parse,
+)
 from bluemedia.operations import (
     CancelRequest,
     CancelResponse,
@@ -42,6 +48,7 @@ __all__ = [
     "MissingTransportError",
     "Response",
     "ResponseVerificationError",
+    "TransactionRefused",
     "Transport",
 ]
 
@@ -90,6 +97,23 @@ class ResponseVerificationError(GatewayError):
     def __init__(self, response: Any) -> None:
         self.response = response
         super().__init__("the gateway's answer does not verify with the shared key")
+
+
+class TransactionRefused(GatewayError):
+    """The gateway refused to start the payment, and said why.
+
+    The refusal is verified before it is raised, so the reason this carries was
+    signed with the shared key rather than supplied by whoever answered.
+    """
+
+    def __init__(self, refusal: TransactionRefusal) -> None:
+        self.refusal = refusal
+        self.order_id = refusal.order_id
+        self.reason = refusal.reason
+        super().__init__(
+            f"the gateway refused order {refusal.order_id}: "
+            f"{refusal.reason or refusal.confirmation}"
+        )
 
 
 class MissingTransportError(RuntimeError):
@@ -198,10 +222,19 @@ class Client:
         with ``verify_responses=False``; an answer that does not verify is an
         error rather than a value, because its redirection URL is where a payer
         would be sent.
+
+        A refused start answers with a refusal instead of a payment. It is read
+        and verified the same way and then raised as ``TransactionRefused``, so
+        the reason reaches the caller; a refusal whose digest nobody with the
+        key could have produced stays a ``ResponseVerificationError``.
         """
-        return self._exchange(
-            TRANSACTION_PATH, self.prepare(request, **fields), TransactionInit
-        )
+        signed = self.prepare(request, **fields)
+        body = _parse(self.post(TRANSACTION_PATH, signed.to_xml()))
+        if TransactionRefusal.refuses(body):
+            raise TransactionRefused(
+                self._verified(TransactionRefusal.from_xml(body))
+            )
+        return self._verified(TransactionInit.from_xml(body))
 
     def blik(self, code: str | None = None, /, **fields: Any) -> TransactionInit:
         """Start a payment on the BLIK gateway, with the payer's code or without.
@@ -303,12 +336,14 @@ class Client:
             self._key, separator=self.separator, algorithm=self.algorithm
         )
 
-    def _exchange(
-        self, path: str, signed: _Document, answer_type: type[_Answer]
-    ) -> _Answer:
-        answer = answer_type.from_xml(self.post(path, signed.to_xml()))
+    def _verified(self, answer: _Answer) -> _Answer:
         if self.verify_responses and not answer.verify(
             self._key, separator=self.separator, algorithm=self.algorithm
         ):
             raise ResponseVerificationError(answer)
         return answer
+
+    def _exchange(
+        self, path: str, signed: _Document, answer_type: type[_Answer]
+    ) -> _Answer:
+        return self._verified(answer_type.from_xml(self.post(path, signed.to_xml())))

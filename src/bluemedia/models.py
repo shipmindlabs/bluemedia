@@ -14,6 +14,11 @@ A few elements hold elements rather than text. ``_nested`` declares one as a
 document of its own, which parses and serialises like any other and whose parts
 take the single place its element has in the signing order.
 
+The transaction root carries two different documents back: the answer to a
+started payment and the refusal of one. They are separate models, told apart by
+the element only a refusal has, so a refusal is read and verified rather than
+reported as an element the answer does not declare.
+
 Values stay text from the wire to the digest. The gateway signs the exact
 characters it sent, so ``10.90`` must not become a number that renders back as
 ``10.9``.
@@ -31,6 +36,7 @@ from bluemedia.signing import (
     DEFAULT_SEPARATOR,
     TRANSACTION_FIELD_ORDER,
     TRANSACTION_INIT_FIELD_ORDER,
+    TRANSACTION_REFUSAL_FIELD_ORDER,
 )
 from bluemedia.signing import ordered_values as _ordered_values
 from bluemedia.signing import sign as _sign
@@ -41,6 +47,7 @@ __all__ = [
     "MalformedXMLError",
     "MissingElementError",
     "TransactionInit",
+    "TransactionRefusal",
     "TransactionStart",
     "UnexpectedRootError",
     "UnknownElementError",
@@ -330,3 +337,35 @@ class TransactionInit(_Document):
     payment_status: str = _element("paymentStatus")
     redirect_url: str | None = _optional("redirecturl")
     hash: str | None = _optional("hash")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TransactionRefusal(_Document):
+    """The gateway's refusal to start a transaction.
+
+    It shares the transaction root with the answer but reports an outcome for
+    the order rather than a payment: ``confirmation`` says it was not taken and
+    ``reason`` says why. There is no ``remoteID`` and nowhere to send a payer,
+    so this is a document of its own rather than an answer with elements
+    missing, signed in its own order and verified like any other.
+    """
+
+    XML_ROOT: ClassVar[str] = "transaction"
+    FIELD_ORDER: ClassVar[tuple[str, ...]] = TRANSACTION_REFUSAL_FIELD_ORDER
+
+    #: The element no answer carries, which is what tells the two apart.
+    MARKER: ClassVar[str] = "confirmation"
+
+    service_id: str = _element("serviceID")
+    order_id: str = _element("orderID")
+    confirmation: str = _element("confirmation")
+    reason: str | None = _optional("reason")
+    hash: str | None = _optional("hash")
+
+    @classmethod
+    def refuses(cls, source: str | bytes | ET.Element) -> bool:
+        """Whether a transaction document is a refusal rather than an answer."""
+        root = source if isinstance(source, ET.Element) else _parse(source)
+        if root.tag.strip().lower() != cls.XML_ROOT.lower():
+            return False
+        return any(child.tag.strip().lower() == cls.MARKER for child in root)

@@ -11,13 +11,17 @@ from bluemedia import (
     PRODUCTION_BASE_URL,
     SANDBOX_BASE_URL,
     TRANSACTION_PATH,
+    TRANSACTION_REFUSAL_FIELD_ORDER,
     Client,
     GatewayError,
     GatewayStatusError,
     ResponseVerificationError,
     TransactionInit,
+    TransactionRefusal,
+    TransactionRefused,
     TransactionStart,
     XMLParseError,
+    sign,
 )
 
 KEY = "9dfc5eb3d1b2f4e0"
@@ -64,6 +68,20 @@ def init(**overrides: Any) -> TransactionInit:
 
 def answer(key: str = KEY, *, algorithm: str = "sha256", **overrides: Any) -> str:
     return init(**overrides).signed(key, algorithm=algorithm).to_xml()
+
+
+def refusal(**overrides: Any) -> TransactionRefusal:
+    message = TransactionRefusal(
+        service_id=SERVICE_ID,
+        order_id="5555",
+        confirmation="NOTCONFIRMED",
+        reason="WRONG_HASH",
+    )
+    return dataclasses.replace(message, **overrides) if overrides else message
+
+
+def refused(key: str = KEY, **overrides: Any) -> str:
+    return refusal(**overrides).signed(key).to_xml()
 
 
 def client(response: Response | None = None, **kwargs: Any) -> tuple[Client, Transport]:
@@ -149,6 +167,72 @@ def test_an_unsigned_answer_is_refused():
 def test_verification_can_be_turned_off():
     gateway, _ = client(Response(answer("another-shared-key")), verify_responses=False)
     assert gateway.start(order_id="5555", amount="10.99").remote_id == "AB-1"
+
+
+def test_a_refused_start_is_a_typed_refusal_not_a_parse_error():
+    gateway, _ = client(Response(refused()))
+    with pytest.raises(TransactionRefused) as excinfo:
+        gateway.start(order_id="5555", amount="10.99")
+
+    assert isinstance(excinfo.value, GatewayError)
+    assert excinfo.value.order_id == "5555"
+    assert excinfo.value.reason == "WRONG_HASH"
+    assert excinfo.value.refusal.confirmation == "NOTCONFIRMED"
+    assert "WRONG_HASH" in str(excinfo.value)
+
+
+def test_a_forged_refusal_stays_an_error():
+    gateway, _ = client(Response(refused("another-shared-key")))
+    with pytest.raises(ResponseVerificationError) as excinfo:
+        gateway.start(order_id="5555", amount="10.99")
+    assert isinstance(excinfo.value.response, TransactionRefusal)
+    assert not isinstance(excinfo.value, TransactionRefused)
+
+
+def test_an_unsigned_refusal_stays_an_error():
+    gateway, _ = client(Response(refusal().to_xml()))
+    with pytest.raises(ResponseVerificationError):
+        gateway.start(order_id="5555", amount="10.99")
+
+
+def test_a_refusal_without_a_reason_still_refuses():
+    gateway, _ = client(Response(refused(reason=None)))
+    with pytest.raises(TransactionRefused) as excinfo:
+        gateway.start(order_id="5555", amount="10.99")
+    assert excinfo.value.reason is None
+    assert "NOTCONFIRMED" in str(excinfo.value)
+
+
+def test_an_unverified_refusal_still_refuses_when_verification_is_off():
+    gateway, _ = client(
+        Response(refused("another-shared-key")), verify_responses=False
+    )
+    with pytest.raises(TransactionRefused):
+        gateway.start(order_id="5555", amount="10.99")
+
+
+def test_the_refusal_signs_in_its_own_order_and_round_trips():
+    message = refusal()
+    assert message.values() == [SERVICE_ID, "5555", "NOTCONFIRMED", "WRONG_HASH"]
+    assert message.sign(KEY) == sign(
+        message.to_fields(), TRANSACTION_REFUSAL_FIELD_ORDER, KEY
+    )
+
+    signed = message.signed(KEY)
+    assert TransactionRefusal.from_xml(signed.to_xml()) == signed
+    assert signed.verify(KEY) is True
+
+
+def test_an_answer_is_not_read_as_a_refusal():
+    assert TransactionRefusal.refuses(answer()) is False
+    assert TransactionRefusal.refuses(refused()) is True
+
+
+def test_a_refused_blik_payment_reads_the_same_way():
+    gateway, _ = client(Response(refused()))
+    with pytest.raises(TransactionRefused) as excinfo:
+        gateway.blik("777123", order_id="5555", amount="10.99")
+    assert excinfo.value.reason == "WRONG_HASH"
 
 
 def test_a_failing_status_carries_the_body():
