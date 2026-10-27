@@ -244,6 +244,36 @@ Use `prepare()` to get the signed request without sending it -- useful for a
 call the client does not make yet, or for a golden test against the
 specification.
 
+### A refused start
+
+The gateway can also answer a start by refusing it, and a refusal is a different
+document under the same `transaction` root: no `remoteID` and nowhere to send a
+payer, a `confirmation` saying the order was not taken and a `reason` saying
+why. It is told apart by the element only a refusal carries, read as a
+`TransactionRefusal`, verified with the same key, and raised:
+
+```python
+from bluemedia import TransactionRefused
+
+try:
+    answer = client.start(order_id="5555", amount="10.99", currency="PLN")
+except TransactionRefused as refused:
+    refused.reason    # 'transaction limit exceeded'
+    refused.order_id  # '5555'
+    refused.refusal   # the verified TransactionRefusal itself
+```
+
+So a refusal is an outcome with a reason rather than an element the answer does
+not declare. `TransactionRefused` is a `GatewayError`, which is what a caller
+that only cares that the payment did not start can catch.
+
+The refusal is verified before it is raised, so the reason it carries was signed
+with the shared key rather than supplied by whoever answered: one whose digest
+the key does not produce stays a `ResponseVerificationError`, because a forged
+refusal would otherwise tell a shop whatever it liked about an order. It signs
+in its own order, `TRANSACTION_REFUSAL_FIELD_ORDER`, which is the four fields it
+carries and not a shortened answer.
+
 ## BLIK
 
 BLIK is a gateway rather than a second protocol: the same transaction document,
