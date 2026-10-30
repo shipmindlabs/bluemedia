@@ -47,6 +47,7 @@ __all__ = [
     "GatewayStatusError",
     "MissingTransportError",
     "Response",
+    "ResponseMismatchError",
     "ResponseVerificationError",
     "TransactionRefused",
     "Transport",
@@ -99,6 +100,27 @@ class ResponseVerificationError(GatewayError):
         super().__init__("the gateway's answer does not verify with the shared key")
 
 
+class ResponseMismatchError(GatewayError):
+    """The answer verifies, but it answers another request.
+
+    A verified answer still has to belong to the call that was made: one
+    naming another order, or echoing another message, reports a different
+    payment and would otherwise be acted on as if it reported this one.
+    """
+
+    def __init__(
+        self, field: str, expected: str | None, found: str | None, response: Any
+    ) -> None:
+        self.field = field
+        self.expected = expected
+        self.found = found
+        self.response = response
+        super().__init__(
+            f"the gateway answered {field} {found!r} "
+            f"to a request naming {expected!r}"
+        )
+
+
 class TransactionRefused(GatewayError):
     """The gateway refused to start the payment, and said why.
 
@@ -149,6 +171,10 @@ def _httpx_transport(timeout: float) -> Any:
             "pass http=... or install bluemedia[httpx]"
         ) from exc
     return httpx.Client(timeout=timeout)
+
+
+def _identifier(value: str | None) -> str:
+    return value.strip() if value is not None else ""
 
 
 class Client:
@@ -221,7 +247,9 @@ class Client:
         The answer is verified with the same key unless the client was built
         with ``verify_responses=False``; an answer that does not verify is an
         error rather than a value, because its redirection URL is where a payer
-        would be sent.
+        would be sent. For the same reason it has to be the answer to this
+        request: one naming another order raises ``ResponseMismatchError``,
+        whether or not the client verifies digests.
 
         A refused start answers with a refusal instead of a payment. It is read
         and verified the same way and then raised as ``TransactionRefused``, so
@@ -231,10 +259,12 @@ class Client:
         signed = self.prepare(request, **fields)
         body = _parse(self.post(TRANSACTION_PATH, signed.to_xml()))
         if TransactionRefusal.refuses(body):
-            raise TransactionRefused(
-                self._verified(TransactionRefusal.from_xml(body))
-            )
-        return self._verified(TransactionInit.from_xml(body))
+            refusal = self._verified(TransactionRefusal.from_xml(body))
+            self._match(refusal, "orderID", signed.order_id, refusal.order_id)
+            raise TransactionRefused(refusal)
+        answer = self._verified(TransactionInit.from_xml(body))
+        self._match(answer, "orderID", signed.order_id, answer.order_id)
+        return answer
 
     def blik(self, code: str | None = None, /, **fields: Any) -> TransactionInit:
         """Start a payment on the BLIK gateway, with the payer's code or without.
@@ -258,20 +288,18 @@ class Client:
         is named by ``remote_id`` or by ``order_id``, and a ``message_id`` is
         made up when the caller does not bring one.
         """
+        signed = self._operation(RefundRequest, request, fields)
         return self._exchange(
-            REFUND_PATH,
-            self._operation(RefundRequest, request, fields),
-            RefundResponse,
+            REFUND_PATH, signed, RefundResponse, signed.message_id
         )
 
     def cancel(
         self, request: CancelRequest | None = None, /, **fields: Any
     ) -> CancelResponse:
         """Call off a payment the gateway has not settled yet."""
+        signed = self._operation(CancelRequest, request, fields)
         return self._exchange(
-            CANCEL_PATH,
-            self._operation(CancelRequest, request, fields),
-            CancelResponse,
+            CANCEL_PATH, signed, CancelResponse, signed.message_id
         )
 
     def status(
@@ -343,7 +371,25 @@ class Client:
             raise ResponseVerificationError(answer)
         return answer
 
+    def _match(
+        self,
+        answer: _Document,
+        field: str,
+        expected: str | None,
+        found: str | None,
+    ) -> None:
+        if _identifier(found) != _identifier(expected):
+            raise ResponseMismatchError(field, expected, found, answer)
+
     def _exchange(
-        self, path: str, signed: _Document, answer_type: type[_Answer]
+        self,
+        path: str,
+        signed: _Document,
+        answer_type: type[_Answer],
+        message_id: str,
     ) -> _Answer:
-        return self._verified(answer_type.from_xml(self.post(path, signed.to_xml())))
+        answer = self._verified(
+            answer_type.from_xml(self.post(path, signed.to_xml()))
+        )
+        self._match(answer, "messageID", message_id, answer.message_id)
+        return answer

@@ -19,6 +19,7 @@ from bluemedia.client import (
     GatewayError,
     GatewayStatusError,
     MissingTransportError,
+    ResponseMismatchError,
     ResponseVerificationError,
     TransactionRefused,
 )
@@ -123,6 +124,7 @@ __all__ = [
     "RefundAmountError",
     "RefundRequest",
     "RefundResponse",
+    "ResponseMismatchError",
     "ResponseVerificationError",
     "SANDBOX_BASE_URL",
     "STATUS_PATH",
