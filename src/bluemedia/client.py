@@ -6,17 +6,21 @@ out of the tests and lets a caller bring its own session, retries, proxy or
 instrumentation. When nothing is given, httpx is imported lazily, so the
 package stays dependency-free for anyone who only signs and reads documents.
 
+The notifications the gateway pushes the other way are read here too: a client
+already holds the service id they are addressed to and the key they are signed
+with, so answering one needs nothing else and no transport at all.
+
 The sandbox is the default base URL: a client left unconfigured must not move
 real money.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Protocol, TypeVar
 
 from bluemedia.blik import blik_transaction
-from bluemedia.itn import NotificationList
+from bluemedia.itn import ConfirmationList, Notification, NotificationList
 from bluemedia.models import (
     TransactionInit,
     TransactionRefusal,
@@ -43,6 +47,7 @@ __all__ = [
     "STATUS_PATH",
     "TRANSACTION_PATH",
     "Client",
+    "ForeignNotificationError",
     "GatewayError",
     "GatewayStatusError",
     "MissingTransportError",
@@ -118,6 +123,26 @@ class ResponseMismatchError(GatewayError):
         super().__init__(
             f"the gateway answered {field} {found!r} "
             f"to a request naming {expected!r}"
+        )
+
+
+class ForeignNotificationError(GatewayError):
+    """A notification addressed to another service reached this client.
+
+    Its digests were taken with another service's key, so this client could
+    only answer every payment in it ``NOTCONFIRMED`` and leave the gateway
+    sending it again. Raising says which service it belongs to instead, so a
+    shop serving several can route it to the client holding the right key.
+    """
+
+    def __init__(
+        self, expected: str, found: str | None, notifications: Any
+    ) -> None:
+        self.expected = expected
+        self.found = found
+        self.notifications = notifications
+        super().__init__(
+            f"the notification names service {found!r}, not {expected!r}"
         )
 
 
@@ -320,6 +345,41 @@ class Client:
                 ):
                     raise ResponseVerificationError(notification)
         return answer
+
+    def notifications(self, payload: str | bytes) -> NotificationList:
+        """Read an ITN the gateway pushed, as it arrives in the form field.
+
+        The payload is base64, which is how the gateway posts it. A list naming
+        another service raises ``ForeignNotificationError`` before anything in
+        it is looked at, because this client's key would refuse every payment
+        in it.
+        """
+        notifications = NotificationList.from_base64(payload)
+        if _identifier(notifications.service_id) != _identifier(self.service_id):
+            raise ForeignNotificationError(
+                self.service_id, notifications.service_id, notifications
+            )
+        return notifications
+
+    def confirm(
+        self,
+        payload: str | bytes,
+        *,
+        accept: Callable[[Notification], bool] | None = None,
+    ) -> ConfirmationList:
+        """Answer a pushed notification with the signed reply it expects back.
+
+        ``accept`` decides whether the shop takes each payment and is only
+        asked about the notifications whose digest already verifies, which
+        ``verify_responses=False`` does not change: that setting governs the
+        answers to calls this client makes, not the payments it books.
+        """
+        return self.notifications(payload).confirm(
+            self._key,
+            accept=accept,
+            separator=self.separator,
+            algorithm=self.algorithm,
+        )
 
     def post(self, path: str, document: str) -> str:
         """Post one XML document and return the body of the answer."""

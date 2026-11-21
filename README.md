@@ -99,10 +99,10 @@ response, order by order -- an unanswered notification is simply sent again.
 ```python
 from flask import Flask, Response, request
 
-from bluemedia import SUCCESS, NotificationList
+from bluemedia import SUCCESS, Client
 
 app = Flask(__name__)
-SHARED_KEY = "9dfc5eb3d1b2f4e0"
+client = Client("123456", "9dfc5eb3d1b2f4e0")
 
 
 def book(notification):
@@ -114,17 +114,17 @@ def book(notification):
 
 @app.post("/bluemedia/itn")
 def itn():
-    notifications = NotificationList.from_base64(request.form["transactions"])
-    reply = notifications.confirm(SHARED_KEY, accept=book)
+    reply = client.confirm(request.form["transactions"], accept=book)
     return Response(reply.to_xml(), mimetype="application/xml")
 ```
 
-`confirm()` verifies each notification, asks `accept` about the ones that
-verify, answers `CONFIRMED` or `NOTCONFIRMED` per order and signs the reply with
-the same key. `book()` is only ever called for a notification whose digest
-already checks out, so a forged one cannot be booked by a callback that trusts
-what it is handed; and returning false for a payment the shop cannot take
-leaves the gateway sending it again rather than considering it settled.
+`confirm()` decodes the form field, verifies each notification, asks `accept`
+about the ones that verify, answers `CONFIRMED` or `NOTCONFIRMED` per order and
+signs the reply with the same key. `book()` is only ever called for a
+notification whose digest already checks out, so a forged one cannot be booked
+by a callback that trusts what it is handed; and returning false for a payment
+the shop cannot take leaves the gateway sending it again rather than considering
+it settled.
 
 The rest of this README is the detail behind those two examples.
 
@@ -338,6 +338,17 @@ for a shop that wants to look before answering.
 it, so each `Notification` is given it while parsing and verifies on its own.
 `from_xml()` takes an already decoded document; a payload that is not base64
 raises `Base64DecodeError`, one more subclass of `XMLParseError`.
+
+A `Client` already holds the service id those notifications are addressed to and
+the key they are signed with, so it does both steps itself and needs no
+transport to do them: `client.notifications(form["transactions"])` decodes and
+parses the field, and `client.confirm(form["transactions"], accept=book)`
+answers it. A list naming another service raises `ForeignNotificationError`
+before the callback sees anything, because this client's key could only refuse
+every payment in it and leave the gateway resending it; a shop serving several
+services routes it to the client holding the right key. `verify_responses=False`
+does not reach any of this -- it governs the answers to calls the client makes,
+not the payments it books.
 
 ### Recurring payments
 
